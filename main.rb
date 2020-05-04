@@ -4,7 +4,7 @@ require 'timeout'
 module MiniWebServer
   TIMEOUT = 10
   attr_reader :workers
-  def logger # TODO: ここの logger は見れるか
+  def logger
     @logger ||= Logger.new(STDOUT)
   end
   class ThreadPool
@@ -16,9 +16,8 @@ module MiniWebServer
       @max   = max
       @min   = min
       @spawned = 0
-      @running = 0
+      @waiting = 0
       @shutdown = false
-      @graceful_shutdown = false
       @workers = []
       @min.times do
         sync { spawn_thread }
@@ -32,20 +31,15 @@ module MiniWebServer
           loop do
             begin
               sync do
-                while @jobs.empty?
-                  @empty.wait(@mutex) if @jobs.size == 0
-                  throw tag if @shutdown
-                end
+                @full.signal
+                @waiting += 1
+                throw tag if @shutdown
+                @empty.wait(@mutex) while @jobs.empty?
+                throw tag if @shutdown
                 job = @jobs.shift || fail
-                @running += 1
+                @waiting -= 1
               end
               Timeout.timeout(TIMEOUT) { job.(id) }
-              sync do
-                throw tag if (@shutdown && !@graceful_shutdown) ||
-                             (@graceful_shutdown && @jobs.empty?)
-                @running -= 1
-                @full.signal
-              end
             rescue Timeout::Error => e
               logger.warn "#{e.full_message}"
               retry
@@ -56,8 +50,8 @@ module MiniWebServer
         logger.info "worker #{id} is terminated"
       end
     end
-    def spawn_thread(job = nil)
-      @workers << Thread.new(@spawned += 1, &new_worker(job))
+    def spawn_thread(initial_job = nil)
+      @workers << Thread.new(@spawned += 1, &new_worker(initial_job))
     end
     def sync
       @mutex.synchronize { yield }
@@ -65,33 +59,24 @@ module MiniWebServer
     def push(job)
       return if @shutdown 
       sync do
-        is_full = (@running + @jobs.size) > @max
+        is_full = (@spawned - @waiting + @jobs.size) > @max
         @full.wait(@mutex) if is_full
         @jobs << job
-        (@jobs.size - 1 - (@spawned - @running)) > 0 && !is_full ?
+        (@jobs.size - 1 - @waiting) > 0 && !is_full ?
           spawn_thread(@jobs.shift) : @empty.signal
       end
     end
     alias :<< :push
-    def graceful_shutdown
-      sync do
-        @graceful_shutdown = true
-        logger.info "stat: {job_size:%2d, running:%2d, workers:%2d}" % [
-                      @jobs.size,
-                      @running,
-                      @workers.size
-                    ]
-      end
-    end
     def shutdown
       sync do
         @shutdown = true
         @empty.broadcast
         @full.broadcast
-        logger.info "stat: {job_size:%2d, running:%2d, workers:%2d}" % [
+        logger.info "stat: {job_size:%2d, waiting:%2d, workers:%2d, running:%2d}" % [
                       @jobs.size,
-                      @running,
-                      @workers.size
+                      @waiting,
+                      @spawned,
+                      @spawned - @waiting,
                     ]
       end
     end
@@ -99,9 +84,9 @@ module MiniWebServer
 end
 
 include MiniWebServer
-tp = ThreadPool.new(4)
+tp = ThreadPool.new(37)
 
-10.times do |id|
+123.times do |id|
   puts "job add: #{id}"
   tp << proc do |worker_id|
     puts "start {worker_id:#{worker_id}, job_id:#{id}}"
