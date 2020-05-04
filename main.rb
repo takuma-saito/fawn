@@ -7,13 +7,12 @@ module MiniWebServer
     @logger ||= Logger.new(STDOUT)
   end
   class ThreadPool
-    def initialize(max, &handle_job)
+    def initialize(max)
       @mutex = Mutex.new
-      @empty = ConditionalVariable.new
-      @full  = ConditionalVariable.new
+      @empty = ConditionVariable.new
+      @full  = ConditionVariable.new
       @jobs  = []
       @max   = max
-      @handle_job = handle_job
       @spawned = 0
       @running = 0
       @shutdown = false
@@ -22,24 +21,25 @@ module MiniWebServer
       proc do |id|
         Thread.current[:name] = id
         loop do
-          sync do
-            @full.signal(@mutex)
-            @empty.wait(@mutex)
-            if @shutdown
-              @spawned -= 1
-              logger.info "#{id} is terminated"
-              Thread.exit
+          begin
+            job = nil
+            sync do
+              @full.signal
+              @empty.wait(@mutex)
+              if @shutdown
+                @spawned -= 1
+                logger.info "#{id} is terminated"
+                Thread.exit
+              end
+              job = @jobs.shift
+              @running += 1
             end
-            job = @jobs.shift
-            @running += 1
+            Timeout.timeout(TIMEOUT) { job.(id) }
+            sync { @running -= 1 }
+          rescue Timeout::Error => e
+            logger.warn "#{e.full_message}"
+            retry
           end
-          Timeout.timeout(TIMEOUT) do
-            @handle_job.(job)
-          end
-          sync { @running -= 1 }
-        rescue Timeout::Error => e
-          logger.warn "#{e.full_message}"
-          retry
         end
       end
     end
@@ -52,12 +52,29 @@ module MiniWebServer
     def push(job)
       sync do
         @full.wait(@mutex) if (@running + @jobs.size) > @max
-        @todo << job
+        @jobs << job
         spawned if (@jobs.size - @running) > 0
+        @empty.signal
       end
     end
+    alias :<< :push
     def shutdown
       @empty.broadcast # TODO: running のプロセスの終了を待つにはどうしたらいいか
     end
   end
 end
+
+include MiniWebServer
+tp = ThreadPool.new(3)
+
+5.times do |id|
+  tp << proc do |worker_id|
+    puts "start {worker_id:#{worker_id}, id:#{id}}"
+    sleep (rand * 2.0)
+    puts "finish {worker_id:#{worker_id}, id:#{id}}"
+  end
+end
+
+sleep 5.0
+tp.shutdown
+
