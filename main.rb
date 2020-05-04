@@ -10,34 +10,26 @@ module MiniWebServer
   class ThreadPool
     def initialize(max, min = max/2)
       @mutex = Mutex.new
-      @empty = ConditionVariable.new
-      @full  = ConditionVariable.new
-      @jobs  = []
+      @jobs  = SizedQueue.new(max)
       @max   = max
-      @min   = min
       @spawned = 0
       @waiting = 0
       @shutdown = false
       @workers = []
-      @min.times do
-        sync { spawn_thread }
-      end
+      min.times { spawn_thread }
     end
-    def new_worker(initial_job)
+    def new_worker
       proc do |id|
         Thread.current[:name] = id
         catch do |tag|
-          job = initial_job
           loop do
             begin
+              job = nil
               sync do
-                @full.signal
                 @waiting += 1
-                throw tag if @shutdown
-                @empty.wait(@mutex) while @jobs.empty?
-                throw tag if @shutdown
-                job = @jobs.shift || fail
+                job = @jobs.shift
                 @waiting -= 1
+                throw tag unless job
               end
               Timeout.timeout(TIMEOUT) { job.(id) }
             rescue Timeout::Error => e
@@ -50,41 +42,33 @@ module MiniWebServer
         logger.info "worker #{id} is terminated"
       end
     end
-    def spawn_thread(initial_job = nil)
-      @workers << Thread.new(@spawned += 1, &new_worker(initial_job))
+    def spawn_thread
+      @workers << Thread.new(@spawned += 1, &new_worker)
     end
     def sync
       @mutex.synchronize { yield }
     end
     def push(job)
-      return if @shutdown 
-      sync do
-        is_full = (@spawned - @waiting + @jobs.size) > @max
-        @full.wait(@mutex) if is_full
-        @jobs << job
-        (@jobs.size - 1 - @waiting) > 0 && !is_full ?
-          spawn_thread(@jobs.shift) : @empty.signal
-      end
+      spawn_thread if (@jobs.size + @spawned) <= @max
+      @jobs << job
     end
     alias :<< :push
     def shutdown
-      sync do
-        @shutdown = true
-        @empty.broadcast
-        @full.broadcast
-        logger.info "stat: {job_size:%2d, waiting:%2d, workers:%2d, running:%2d}" % [
-                      @jobs.size,
-                      @waiting,
-                      @spawned,
-                      @spawned - @waiting,
-                    ]
-      end
+      @workers.size.times { @jobs.push(nil) }
+      @workers.each(&:join)
+      @jobs.close
+      logger.info "stat: {job_size:%2d, waiting:%2d, workers:%2d, running:%2d}" % [
+                    @jobs.size,
+                    @waiting,
+                    @spawned,
+                    @spawned - @waiting,
+                  ]
     end
   end
 end
 
 include MiniWebServer
-tp = ThreadPool.new(37)
+tp = ThreadPool.new(27)
 
 123.times do |id|
   puts "job add: #{id}"
@@ -96,5 +80,4 @@ tp = ThreadPool.new(37)
 end
 
 tp.shutdown
-tp.workers.each(&:join)
 
