@@ -3,84 +3,90 @@ require 'timeout'
 
 module MiniWebServer
   TIMEOUT = 10
+  attr_reader :workers
   def logger # TODO: ここの logger は見れるか
     @logger ||= Logger.new(STDOUT)
   end
   class ThreadPool
-    def initialize(max)
+    def initialize(max, min = max)
       @mutex = Mutex.new
       @empty = ConditionVariable.new
       @full  = ConditionVariable.new
       @jobs  = []
       @max   = max
+      @min   = min
       @spawned = 0
       @running = 0
       @shutdown = false
       @workers = []
+      @min.times do
+        sync { spawn_thread }
+      end
     end
     def new_worker
       proc do |id|
         Thread.current[:name] = id
-        loop do
-          begin
-            job = nil
-            sync do
-              @full.signal
-              @empty.wait(@mutex)
-              if @shutdown
-                @spawned -= 1
-                logger.info "#{id} is terminated"
-                Thread.exit
+        catch do |tag|
+          loop do
+            begin
+              job = nil
+              sync do
+                while @jobs.empty?
+                  @empty.wait(@mutex) if @jobs.size == 0
+                  throw tag if @shutdown
+                end
+                job = @jobs.shift || fail
+                @running += 1
               end
-              job = @jobs.shift
-              @running += 1
+              Timeout.timeout(TIMEOUT) { job.(id) }
+              sync do
+                throw tag if @shutdown
+                @running -= 1
+                @full.signal
+              end
+            rescue Timeout::Error => e
+              logger.warn "#{e.full_message}"
+              retry
             end
-            Timeout.timeout(TIMEOUT) { job.(id) }
-            sync { @running -= 1 }
-          rescue Timeout::Error => e
-            logger.warn "#{e.full_message}"
-            retry
           end
         end
+        sync { @spawned -= 1 }
+        logger.info "worker #{id} is terminated"
       end
     end
-    def spawned
+    def spawn_thread
       @workers << Thread.new(@spawned += 1, &new_worker)
-      @full.wait(@mutex)
     end
     def sync
       @mutex.synchronize { yield }
     end
     def push(job)
       sync do
+        @full.wait(@mutex) if (@running + @jobs.size) > @max
         @jobs << job
-        spawned if (@jobs.size - @running) > 0
-        logger.info "stat: {job_size:#{@jobs.size}, running:#{@running}}"
-        @empty.broadcast
-        @full.wait(@mutex) if (@running + @jobs.size) >= @max
+        @empty.signal
       end
     end
     alias :<< :push
-    def graceful_shutdown
-      sync {
+    def shutdown
+      sync do
         @shutdown = true
         @empty.broadcast
-        @workers.each(&:join)
-      }
-    end
-    def shutdown
-      sync {
-        @shutdown = true
-        @empty.broadcast # TODO: running のプロセスの終了を待つにはどうしたらいいか
-      }
+        @full.broadcast
+        logger.info "stat: {job_size:%2d, running:%2d, workers:%2d}" % [
+                      @jobs.size,
+                      @running,
+                      @workers.size
+                    ]
+      end
     end
   end
 end
 
 include MiniWebServer
-tp = ThreadPool.new(3)
+tp = ThreadPool.new(12)
 
-10.times do |id|
+35.times do |id|
   puts "job add: #{id}"
   tp << proc do |worker_id|
     puts "start {worker_id:#{worker_id}, job_id:#{id}}"
@@ -89,6 +95,6 @@ tp = ThreadPool.new(3)
   end
 end
 
-# sleep 8.0
-tp.graceful_shutdown
+tp.shutdown
+tp.workers.each(&:join)
 
