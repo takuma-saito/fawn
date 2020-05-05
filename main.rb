@@ -1,7 +1,7 @@
 require 'logger'
 require 'timeout'
 
-module MiniWebServer
+module Fawn
   TIMEOUT = 10
   attr_reader :workers
   def logger
