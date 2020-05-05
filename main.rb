@@ -7,16 +7,18 @@ module MiniWebServer
     @logger ||= Logger.new(STDOUT)
   end
   class ThreadPool
-    def initialize(max)
+    def initialize(max, min = max/2)
       @mutex = Mutex.new
       @empty = ConditionVariable.new
       @full  = ConditionVariable.new
       @jobs  = []
       @max   = max
-      @spawned = 0
-      @running = 0
+      @min   = min
       @shutdown = false
-      @workers = []
+      @running  = 0
+      @spawned  = 0
+      @workers  = []
+      min.times.map { spawn_thread }
     end
     def new_worker
       proc do |id|
@@ -25,18 +27,19 @@ module MiniWebServer
           begin
             job = nil
             sync do
-              @full.signal
-              @empty.wait(@mutex)
-              if @shutdown
-                @spawned -= 1
+              @empty.wait(@mutex) until @jobs.size > 0
+              job = @jobs.shift
+              unless job
                 logger.info "#{id} is terminated"
                 Thread.exit
               end
-              job = @jobs.shift
               @running += 1
             end
             Timeout.timeout(TIMEOUT) { job.(id) }
-            sync { @running -= 1 }
+            sync do
+              @full.signal
+              @running -= 1
+            end
           rescue Timeout::Error => e
             logger.warn "#{e.full_message}"
             retry
@@ -44,43 +47,32 @@ module MiniWebServer
         end
       end
     end
-    def spawned
+    def spawn_thread
       @workers << Thread.new(@spawned += 1, &new_worker)
-      @full.wait(@mutex)
     end
     def sync
       @mutex.synchronize { yield }
     end
     def push(job)
       sync do
+        @full.wait(@mutex) if @jobs.size >= @max
         @jobs << job
-        spawned if (@jobs.size - @running) > 0
-        logger.info "stat: {job_size:#{@jobs.size}, running:#{@running}}"
-        @empty.broadcast
-        @full.wait(@mutex) if (@running + @jobs.size) >= @max
+        spawn_thread if (@jobs.size - @running) > 0
+        @empty.signal
       end
     end
     alias :<< :push
-    def graceful_shutdown
-      sync {
-        @shutdown = true
-        @empty.broadcast
-        @workers.each(&:join)
-      }
-    end
     def shutdown
-      sync {
-        @shutdown = true
-        @empty.broadcast # TODO: running のプロセスの終了を待つにはどうしたらいいか
-      }
+      @workers.size.times { push(nil) }
+      @workers.each(&:join)
     end
   end
 end
 
 include MiniWebServer
-tp = ThreadPool.new(3)
+tp = ThreadPool.new(10, 1)
 
-10.times do |id|
+25.times do |id|
   puts "job add: #{id}"
   tp << proc do |worker_id|
     puts "start {worker_id:#{worker_id}, job_id:#{id}}"
@@ -90,5 +82,5 @@ tp = ThreadPool.new(3)
 end
 
 # sleep 8.0
-tp.graceful_shutdown
+tp.shutdown
 
