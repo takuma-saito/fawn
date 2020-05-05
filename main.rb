@@ -46,7 +46,7 @@ module Fawn
   end
 end
 
-include MiniWebServer
+include Fawn
 tp = ThreadPool.new(4)
 
 15.times do |id|
