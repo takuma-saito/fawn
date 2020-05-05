@@ -1,5 +1,6 @@
 require 'socket'
 require 'time'
+require_relative 'mime'
 
 module Fawn
   CHUNK_SIZE = 512
@@ -37,11 +38,11 @@ module Fawn
           {
             status: 200,
             body: (body = File.read(filename)),
-            content_type: "text/plain; charset=#{body.encoding}"
+            content_type: "#{MIME[filename.split(".").last.to_sym] || 'application/octet-stream'}; charset=#{body.encoding}"
           }
         else
           {
-            status: 400,
+            status: 404,
             body: 'File not found',
             content_type: 'text/plain; charset=utf-8',
           }
@@ -89,7 +90,11 @@ module Fawn
   end
 end
 
-include Fawn::Server
-run do |sock|
-  handle_request(sock)
+def test
+  include Fawn::Server
+  run do |sock|
+    handle_request(sock)
+  end
 end
+
+test
