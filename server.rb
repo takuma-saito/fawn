@@ -1,10 +1,32 @@
 require "socket"
 
+CHUNK_SIZE = 512
+CRLF = "\r\n"
+
+def read_header(sock)
+  String.new.then do |str|
+    loop do
+      str << (t = sock.recv(CHUNK_SIZE))
+      break str if t.size < CHUNK_SIZE
+    end
+  end
+end
+
+def parse_header(str)
+  lines = str.lines
+  version = lines.shift
+  index = lines.find_index {|line| line === CRLF }
+  fail if index.nil?
+  header_lines, rest_lines = lines[0...index], lines[(index+1)..-1]
+  header = header_lines.map do |line|
+    line.match(/(.+):(.+)\r\n/).captures
+  end.to_h
+  [[:method, :url, :protocol].zip(version.split(" ")).to_h.merge!(header), rest_lines]
+end
 
 def handle_request(sock)
-  str = sock.recv(4096)
-  p str.size, sock.remote_address
-  sock.write(str)
+  header, rest_lines = parse_header(read_header(sock)).tap {|header, _| p header }
+  sock.write(header.inspect)
 end
 
 def run
@@ -21,7 +43,6 @@ def run
         puts "#{sock} is accepted"
       else
         handle_request(sock)
-        fail unless sock.eof?
         sock.close
         socks.delete(sock)
         puts "#{sock} is gone"
