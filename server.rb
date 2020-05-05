@@ -6,8 +6,9 @@ module Fawn
   CHUNK_SIZE = 512
   HTTP_1_1 = 'HTTP/1.1'.freeze
   CRLF = "\r\n".freeze
+  BASE_DIR = './dist'
 
-  module Server
+  class Server    
     class InvalidFormatError < StandardError; end
     class UnsupportedProtocolError < StandardError; end
     
@@ -34,7 +35,7 @@ module Fawn
 
     def handle_static_file(sock, header)
       response =
-        if File.readable?(filename = ".#{header[:url]}") && File.file?(filename)
+        if File.readable?(filename = "#{BASE_DIR}#{header[:url]}") && File.file?(filename)
           {
             status: 200,
             body: (body = File.read(filename)),
@@ -61,6 +62,8 @@ module Fawn
       header, rest_lines = parse_header(read_header(sock)).tap {|header, _| p header }
       raise UnsupportedProtocolError unless header[:protocol] === HTTP_1_1 || header[:method] === 'GET'
       handle_static_file(sock, header)
+      sock.close
+      puts "#{sock} is gone"
     end
 
     def run
@@ -77,9 +80,7 @@ module Fawn
             puts "#{sock} is accepted"
           else
             yield sock
-            sock.close
             socks.delete(sock)
-            puts "#{sock} is gone"
           end
         rescue UnsupportedProtocolError, InvalidFormatError => e
           warn "#{e.full_message}"
@@ -96,5 +97,3 @@ def test
     handle_request(sock)
   end
 end
-
-test

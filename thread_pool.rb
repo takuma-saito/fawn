@@ -22,7 +22,11 @@ module Fawn
           begin
             job = @jobs.shift
             break unless job
-            Timeout.timeout(TIMEOUT) { job.(id) }
+            Timeout.timeout(TIMEOUT) do
+              logger.info "worker #{id} is processing"
+              job.(id)
+              logger.info "worker #{id} finish processing"
+            end
           rescue Timeout::Error => e
             logger.warn "#{e.full_message}"
             retry
