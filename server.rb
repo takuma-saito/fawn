@@ -47,13 +47,13 @@ module Fawn
           }
         end
       sock.write(<<~TEXT)
-  #{HTTP_1_1} #{response[:status]}\r
-  date: #{DateTime.now.rfc822}\r
-  content-type: #{response[:content_type]}\r
-  content-length: #{response[:body].bytesize+1}\r
-  \r
-  #{response[:body]}
-  TEXT
+        #{HTTP_1_1} #{response[:status]}\r
+        date: #{DateTime.now.rfc822}\r
+        content-type: #{response[:content_type]}\r
+        content-length: #{response[:body].bytesize+1}\r
+        \r
+        #{response[:body]}
+      TEXT
     end
 
     def handle_request(sock)
