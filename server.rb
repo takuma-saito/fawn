@@ -60,21 +60,69 @@ module Fawn
 
     include BLOCK_MODE
 
-    def parse_header(str)
+    REQUEST_METHOD    = 'REQUEST_METHOD'.freeze
+    SCRIPT_NAME       = 'SCRIPT_NAME'.freeze
+    PATH_INFO         = 'PATH_INFO'.freeze
+    QUERY_STRING      = 'QUERY_STRING'.freeze
+    SERVER_NAME       = 'SERVER_NAME'.freeze
+    SERVER_PORT       = 'SERVER_PORT'.freeze
+    RACK_VERSION      = 'rack.version'.freeze
+    RACK_URL_SCHEME   = 'rack.url_scheme'.freeze
+    RACK_INPUT        = 'rack.input'.freeze
+    RACK_ERRORS       = 'rack.errors'.freeze
+    RACK_MULTITHREAD  = 'rack.multithread'.freeze
+    RACK_MULTIPROCESS = 'rack.multiprocess'.freeze
+    RACK_RUN_ONCE     = 'rack.run_once'.freeze
+    RACK_HIJACK_P     = 'rack.hijack?'.freeze
+    RACK_HIJACK       = 'rack.hijack'.freeze
+    RACK_HIJACK_IO    = 'rack.hijack_io'.freeze
+
+    def parse_rack_env(metainfo, http_headers, request_body)
+      uri = URI.parse(metainfo[:uri])
+      host, port = http_headers['HTTP_HOST'].split(":")
+      port ||= 80
+      host ||= fail # TODO
+      {
+       REQUEST_METHOD    => metainfo[:method],
+       SCRIPT_NAME       => uri.path,
+       PATH_INFO         => '', # TODO
+       QUERY_STRING      => uri.query,
+       SERVER_NAME       => host,
+       SERVER_PORT       => port,
+       RACK_VERSION      => '1.3',
+       RACK_URL_SCHEME   => 'http',
+       RACK_INPUT        => StringIO.new(requst_body),
+       RACK_ERRORS       => $stderr,
+       RACK_MULTITHREAD  => @multithread,
+       RACK_MULTIPROCESS => false,
+       RACK_RUN_ONCE     => false,
+       RACK_HIJACK_P     => true,
+       RACK_HIJACK       => proc {
+         raise NotImplementedError, "only partial hijack is supported." },
+       RACK_HIJACK_IO    => nil
+      }.merge!(http_headers)
+    end
+
+    def initialize(**opts)
+      @multithread = opts[:multithread]
+    end
+
+    def parse_headers(str)
       lines = str.lines # TODO: body がバイナリのときも考える
       status = lines.shift
       index = lines.find_index {|line| line === CRLF }
       raise InvalidFormatError if index.nil?
-      header_lines, rest_lines = lines[0...index], lines[(index+1)..-1]
-      header = header_lines.map do |line|
+      header_lines, request_body = lines[0...index], lines[(index+1)..-1].join
+      http_headers = header_lines.map do |line|
         line.match(/(.+):(.+)\r\n/).captures
-      end.to_h
-      [[:method, :url, :protocol].zip(status.split(" ")).to_h.merge!(header), rest_lines]
+      end.map {|key, value| ["HTTP_#{key}", value]}.to_h
+      [[:method, :url, :protocol].zip(status.split(" ")), http_headers, request_body]
     end
 
-    def handle_static_file(sock, header)
+    def handle_static_file(env)
+      headers = {}
       response =
-        if File.readable?(filename = "#{BASE_DIR}#{header[:url]}") && File.file?(filename)
+        if File.readable?(filename = "#{BASE_DIR}#{env[SCRIPT_NAME]}") && File.file?(filename)
           {
             status: 200,
             body: (body = File.read(filename)),
@@ -87,21 +135,28 @@ module Fawn
             content_type: 'text/plain; charset=utf-8',
           }
         end
-      sock.write(<<~TEXT)
-        #{HTTP_1_1} #{response[:status]}\r
-        date: #{DateTime.now.rfc822}\r
-        content-type: #{response[:content_type]}\r
-        content-length: #{response[:body].bytesize+1}\r
-        \r
-        #{response[:body]}
+      headers['Content-Type'] = response[:content_type]
+      headers['Date'] = DateTime.now.rfc822
+      headers['Content-Length'] = (body = response[:body]).bytesize
+      [status, headers, body]
+    end
+
+    def make_response(status, headers, body)
+      headers_text = headers.to_a.map {|k, v| "#{k}: #{v}"}.join(CRLF)
+      <<~TEXT.chomp!
+        #{HTTP_1_1} #{status}\r
+        #{heaaders_text}
+        #{CRLF}
+        #{body}
       TEXT
     end
 
     def handle_request(sock)
-      header, rest_lines = parse_header(read_content(sock))
-      logger.info header
-      raise UnsupportedProtocolError unless header[:protocol] === HTTP_1_1 || header[:method] === 'GET'
-      handle_static_file(sock, header)
+      rack_env = parse_rack_env(*read_content(sock))
+      logger.info rack_env
+      raise UnsupportedProtocolError unless
+        headers[:protocol] === HTTP_1_1 || headers[:method] === 'GET'
+      sock.write(make_response(*handle_static_file(env)))
       sock.close
       logger.info "#{sock} is gone"
     end

@@ -3,7 +3,7 @@ require_relative 'server'
 
 def multi_thread_run
   tp = ThreadPool.new(30)
-  server = Server.new
+  server = Server.new(multithread: true)
   server.run do |sock|
     tp << proc { server.handle_request(sock) }
   end
