@@ -21,7 +21,7 @@ module Fawn
         puts 'NonBlocking mode enabled'
       end
       def read_content(sock)
-        String.new.then do |str|
+        String.new.yield_self do |str|
           loop do
             str << (t = sock.recv_nonblock(CHUNK_SIZE))
             break str if t.size < CHUNK_SIZE
@@ -38,7 +38,7 @@ module Fawn
 
     module Block
       def read_content(sock)
-        String.new.then do |str|
+        String.new.yield_self do |str|
           loop do
             str << (t = sock.recv(CHUNK_SIZE))
             break str if t.size < CHUNK_SIZE
