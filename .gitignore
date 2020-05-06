@@ -1,3 +1,4 @@
 *.png
 /dist
 /.bundle
+/Gemfile.lock

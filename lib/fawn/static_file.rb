@@ -34,7 +34,7 @@ module Fawn
             }
           end
         headers['Date'] = DateTime.now.rfc822
-        [response[:status], headers, StringIO.new(body)]
+        [response[:status], headers, [response[:body]]]
       end
     end
   end

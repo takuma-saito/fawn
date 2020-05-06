@@ -107,12 +107,13 @@ module Fawn
     end
 
     def make_response(status, headers, body)
+      str = String.new.tap { |str| body.each {|s| str << s} }
       headers_text = headers.to_a.map {|k, v| "#{k}: #{v}"}.join(CRLF)
       <<~TEXT.chomp!
         #{HTTP_1_1} #{status}\r
         #{headers_text}\r
         \r
-        #{body.join}
+        #{str}
       TEXT
     end
 
