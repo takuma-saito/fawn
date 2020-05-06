@@ -20,7 +20,7 @@ module Fawn
       def self.call(env)
         headers = {}
         response =
-          if File.readable?(filename = "#{BASE_DIR}#{env[SCRIPT_NAME]}") && File.file?(filename)
+          if File.readable?(filename = "#{BASE_DIR}#{env[PATH_INFO]}") && File.file?(filename)
             {
               status: 200,
               body: (body = File.read(filename)),

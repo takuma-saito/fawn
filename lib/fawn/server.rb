@@ -10,6 +10,7 @@ require_relative 'static_file'
 module Fawn
   CHUNK_SIZE = 512
   HTTP_1_1 = 'HTTP/1.1'.freeze
+  HTTP_1_0 = 'HTTP/1.0'.freeze
   CRLF = "\r\n".freeze
 
   class Server
@@ -70,8 +71,7 @@ module Fawn
       lines = str.lines # TODO: body がバイナリのときも考える
       status = lines.shift
       index = lines.find_index {|line| line === CRLF }
-      raise InvalidFormatError if index.nil?
-      header_lines, request_body = lines[0...index], lines[(index+1)..-1].join
+      header_lines, request_body = lines[0...index], (index.nil? ? '' : lines[(index+1)..-1].join)
       http_headers = header_lines.map do |line|
         line.match(/(.*?):(.+)\r\n/).captures
       end.map {|key, value| ["HTTP_#{key.upcase}", value]}.to_h
@@ -80,7 +80,7 @@ module Fawn
 
     def parse_rack_env(str)
       metainfo, http_headers, request_body = parse_headers(str)
-      raise UnsupportedRequestError unless metainfo[:protocol] === HTTP_1_1
+      raise UnsupportedRequestError unless [HTTP_1_1, HTTP_1_0].include?(metainfo[:protocol])
       uri = URI.parse(metainfo[:uri])
       host, port = http_headers['HTTP_HOST']&.split(":")
       port ||= 80
@@ -118,12 +118,19 @@ module Fawn
     end
 
     def handle_request(sock)
-      rack_env = parse_rack_env(*read_content(sock))
+      content = read_content(sock)
+      return if content.empty?
+      rack_env = parse_rack_env(content)
       logger.info rack_env
       raise UnsupportedRequestError unless ['HEAD', 'GET'].include?(rack_env[REQUEST_METHOD])
       response = make_response(*@app.call(rack_env))
-      logger.info response
-      sock.write response
+      begin
+        sock.write_nonblock response # TODO
+      rescue IO::WaitWritable
+        logger.info "IO::WaitWritable: #{e.full_message}"
+        IO.select([sock])
+        retry
+      end
       sock.close
       logger.info "#{sock} is gone"
     end
