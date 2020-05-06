@@ -50,7 +50,7 @@ module Fawn
       end
     end
 
-    BLOCK_MODE = Block
+    BLOCK_MODE = NonBlock
 
     include BLOCK_MODE
     include Fawn::Logger
@@ -87,8 +87,8 @@ module Fawn
       host ||= fail # TODO
       {
        REQUEST_METHOD    => metainfo[:method],
-       SCRIPT_NAME       => uri.path,
-       PATH_INFO         => '', # TODO
+       SCRIPT_NAME       => '',
+       PATH_INFO         => uri.path, # TODO
        QUERY_STRING      => uri.query,
        SERVER_NAME       => host,
        SERVER_PORT       => port,
