@@ -1,5 +1,7 @@
 require 'socket'
 require 'time'
+require 'uri'
+require 'stringio'
 require_relative 'logger'
 
 module Fawn
@@ -21,7 +23,7 @@ module Fawn
 
   class Server
     class InvalidFormatError < StandardError; end
-    class UnsupportedProtocolError < StandardError; end
+    class UnsupportedRequestError < StandardError; end
 
     module NonBlock
       def self.included(base)
@@ -60,6 +62,23 @@ module Fawn
 
     include BLOCK_MODE
 
+    def initialize(**opts)
+      @multithread = opts[:multithread]
+    end
+
+    def parse_headers(str)
+      lines = str.lines # TODO: body がバイナリのときも考える
+      status = lines.shift
+      index = lines.find_index {|line| line === CRLF }
+      raise InvalidFormatError if index.nil?
+      header_lines, request_body = lines[0...index], lines[(index+1)..-1].join
+      http_headers = header_lines.map do |line|
+        line.match(/(.*?):(.+)\r\n/).captures
+      end.map {|key, value| ["HTTP_#{key.upcase}", value]}.to_h
+      [[:method, :uri, :protocol].zip(status.split(" ")).to_h, http_headers, request_body]
+    end
+    
+
     REQUEST_METHOD    = 'REQUEST_METHOD'.freeze
     SCRIPT_NAME       = 'SCRIPT_NAME'.freeze
     PATH_INFO         = 'PATH_INFO'.freeze
@@ -77,9 +96,11 @@ module Fawn
     RACK_HIJACK       = 'rack.hijack'.freeze
     RACK_HIJACK_IO    = 'rack.hijack_io'.freeze
 
-    def parse_rack_env(metainfo, http_headers, request_body)
+    def parse_rack_env(str)
+      metainfo, http_headers, request_body = parse_headers(str)
+      raise UnsupportedRequestError unless metainfo[:protocol] === HTTP_1_1
       uri = URI.parse(metainfo[:uri])
-      host, port = http_headers['HTTP_HOST'].split(":")
+      host, port = http_headers['HTTP_HOST']&.split(":")
       port ||= 80
       host ||= fail # TODO
       {
@@ -91,7 +112,7 @@ module Fawn
        SERVER_PORT       => port,
        RACK_VERSION      => '1.3',
        RACK_URL_SCHEME   => 'http',
-       RACK_INPUT        => StringIO.new(requst_body),
+       RACK_INPUT        => StringIO.new(request_body),
        RACK_ERRORS       => $stderr,
        RACK_MULTITHREAD  => @multithread,
        RACK_MULTIPROCESS => false,
@@ -101,22 +122,6 @@ module Fawn
          raise NotImplementedError, "only partial hijack is supported." },
        RACK_HIJACK_IO    => nil
       }.merge!(http_headers)
-    end
-
-    def initialize(**opts)
-      @multithread = opts[:multithread]
-    end
-
-    def parse_headers(str)
-      lines = str.lines # TODO: body がバイナリのときも考える
-      status = lines.shift
-      index = lines.find_index {|line| line === CRLF }
-      raise InvalidFormatError if index.nil?
-      header_lines, request_body = lines[0...index], lines[(index+1)..-1].join
-      http_headers = header_lines.map do |line|
-        line.match(/(.+):(.+)\r\n/).captures
-      end.map {|key, value| ["HTTP_#{key}", value]}.to_h
-      [[:method, :url, :protocol].zip(status.split(" ")), http_headers, request_body]
     end
 
     def handle_static_file(env)
@@ -138,15 +143,15 @@ module Fawn
       headers['Content-Type'] = response[:content_type]
       headers['Date'] = DateTime.now.rfc822
       headers['Content-Length'] = (body = response[:body]).bytesize
-      [status, headers, body]
+      [response[:status], headers, body]
     end
 
     def make_response(status, headers, body)
       headers_text = headers.to_a.map {|k, v| "#{k}: #{v}"}.join(CRLF)
       <<~TEXT.chomp!
         #{HTTP_1_1} #{status}\r
-        #{heaaders_text}
-        #{CRLF}
+        #{headers_text}\r
+        \r
         #{body}
       TEXT
     end
@@ -154,9 +159,8 @@ module Fawn
     def handle_request(sock)
       rack_env = parse_rack_env(*read_content(sock))
       logger.info rack_env
-      raise UnsupportedProtocolError unless
-        headers[:protocol] === HTTP_1_1 || headers[:method] === 'GET'
-      sock.write(make_response(*handle_static_file(env)))
+      raise UnsupportedRequestError unless rack_env[REQUEST_METHOD] === 'GET'
+      sock.write(make_response(*handle_static_file(rack_env)))
       sock.close
       logger.info "#{sock} is gone"
     end
@@ -177,7 +181,7 @@ module Fawn
             yield sock
             socks.delete(sock)
           end
-        rescue UnsupportedProtocolError, InvalidFormatError => e
+        rescue UnsupportedRequestError, InvalidFormatError => e
           logger.warn "#{e.full_message}"
           break
         end
