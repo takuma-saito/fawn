@@ -5,6 +5,18 @@ module Fawn
   module Rack
     class StaticFile
       include Fawn::Const
+      BASE_DIR = './dist'.freeze
+      MIME =
+        {
+          jpg: 'image/jpg',
+          jpeg: 'image/jpg',
+          ico: 'image/webp',
+          png: 'image/png',
+          gif: 'image/gif',
+          html: 'text/html',
+          css: 'text/css',
+          js: 'application/js',
+        }
       def self.call(env)
         headers = {}
         response =
