@@ -6,7 +6,18 @@ module Fawn
   CHUNK_SIZE = 512
   HTTP_1_1 = 'HTTP/1.1'.freeze
   CRLF = "\r\n".freeze
-  BASE_DIR = './dist'
+  BASE_DIR = './dist'.freeze
+  MIME =
+    {
+      jpg: 'image/jpg',
+      jpeg: 'image/jpg',
+      ico: 'image/webp',
+      png: 'image/png',
+      gif: 'image/gif',
+      html: 'text/html',
+      css: 'text/css',
+      js: 'application/js',
+    }
 
   class Server    
     class InvalidFormatError < StandardError; end
