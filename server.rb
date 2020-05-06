@@ -35,6 +35,7 @@ module Fawn
             str << (t = sock.recv_nonblock(CHUNK_SIZE))
             break str if t.size < CHUNK_SIZE
           rescue Errno::EAGAIN
+            logger.warn "EAGAIN: #{e.full_message}"
             IO.select([sock])
           end
         end
@@ -58,12 +59,40 @@ module Fawn
       end
     end
 
-    BLOCK_MODE = NonBlock
+    BLOCK_MODE = Block
 
     include BLOCK_MODE
 
+    class StaticFile
+      def initialize(app)
+        @app = app
+      end
+      def call(env)
+        headers = {}
+        response =
+          if File.readable?(filename = "#{BASE_DIR}#{env[SCRIPT_NAME]}") && File.file?(filename)
+            {
+              status: 200,
+              body: (body = File.read(filename)),
+              content_type: "#{MIME[filename.split(".").last.to_sym] || 'application/octet-stream'}; charset=#{body.encoding}"
+            }
+          else
+            {
+              status: 404,
+              body: 'File not found',
+              content_type: 'text/plain; charset=utf-8',
+            }
+          end
+        headers['Content-Type'] = response[:content_type]
+        headers['Date'] = DateTime.now.rfc822
+        headers['Content-Length'] = (body = response[:body]).bytesize
+        [response[:status], headers, body]
+      end
+    end
+
     def initialize(**opts)
       @multithread = opts[:multithread]
+      @app = StaticFile.new(opts[:app])
     end
 
     def parse_headers(str)
@@ -124,28 +153,6 @@ module Fawn
       }.merge!(http_headers)
     end
 
-    def handle_static_file(env)
-      headers = {}
-      response =
-        if File.readable?(filename = "#{BASE_DIR}#{env[SCRIPT_NAME]}") && File.file?(filename)
-          {
-            status: 200,
-            body: (body = File.read(filename)),
-            content_type: "#{MIME[filename.split(".").last.to_sym] || 'application/octet-stream'}; charset=#{body.encoding}"
-          }
-        else
-          {
-            status: 404,
-            body: 'File not found',
-            content_type: 'text/plain; charset=utf-8',
-          }
-        end
-      headers['Content-Type'] = response[:content_type]
-      headers['Date'] = DateTime.now.rfc822
-      headers['Content-Length'] = (body = response[:body]).bytesize
-      [response[:status], headers, body]
-    end
-
     def make_response(status, headers, body)
       headers_text = headers.to_a.map {|k, v| "#{k}: #{v}"}.join(CRLF)
       <<~TEXT.chomp!
@@ -160,7 +167,7 @@ module Fawn
       rack_env = parse_rack_env(*read_content(sock))
       logger.info rack_env
       raise UnsupportedRequestError unless rack_env[REQUEST_METHOD] === 'GET'
-      sock.write(make_response(*handle_static_file(rack_env)))
+      sock.write(make_response(*@app.call(rack_env)))
       sock.close
       logger.info "#{sock} is gone"
     end
