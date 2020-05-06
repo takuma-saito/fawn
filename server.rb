@@ -90,9 +90,17 @@ module Fawn
       end
     end
 
+    def build_app(app = nil)
+      require 'bundler/setup'
+      Bundler.require(:default)
+      [StaticFile, Rack::Runtime].inject(app) do |app, klass|
+        klass.new(app)
+      end
+    end
+
     def initialize(**opts)
       @multithread = opts[:multithread]
-      @app = StaticFile.new(opts[:app])
+      @app = build_app(opts[:app])
     end
 
     def parse_headers(str)
