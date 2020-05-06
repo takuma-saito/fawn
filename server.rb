@@ -22,26 +22,43 @@ module Fawn
   class Server
     class InvalidFormatError < StandardError; end
     class UnsupportedProtocolError < StandardError; end
-    
-    def read_content(sock)
-      String.new.then do |str|
-        loop do
-          str << (t = sock.recv(CHUNK_SIZE))
-          break str if t.size < CHUNK_SIZE
+
+    module NonBlock
+      def self.included(base)
+        puts 'NonBlocking mode enabled'
+      end
+      def read_content(sock)
+        String.new.then do |str|
+          loop do
+            str << (t = sock.recv_nonblock(CHUNK_SIZE))
+            break str if t.size < CHUNK_SIZE
+          rescue Errno::EAGAIN
+            IO.select([sock])
+          end
         end
+      end
+      def sock_accept(sock)
+        sock.accept_nonblock
       end
     end
 
-    def read_content_nonblocking(sock)
-      String.new.then do |str|
-        loop do
-          str << (t = sock.recv_nonblock(CHUNK_SIZE))
-          break str if t.size < CHUNK_SIZE
-        rescue Errno::EAGAIN
-          IO.select([sock])
+    module Block
+      def read_content(sock)
+        String.new.then do |str|
+          loop do
+            str << (t = sock.recv(CHUNK_SIZE))
+            break str if t.size < CHUNK_SIZE
+          end
         end
       end
+      def sock_accept(sock)
+        sock.accept
+      end
     end
+
+    BLOCK_MODE = NonBlock
+
+    include BLOCK_MODE
 
     def parse_header(str)
       lines = str.lines # TODO: body がバイナリのときも考える
@@ -81,7 +98,7 @@ module Fawn
     end
 
     def handle_request(sock)
-      header, rest_lines = parse_header(read_content_nonblocking(sock))
+      header, rest_lines = parse_header(read_content(sock))
       logger.info header
       raise UnsupportedProtocolError unless header[:protocol] === HTTP_1_1 || header[:method] === 'GET'
       handle_static_file(sock, header)
@@ -99,7 +116,7 @@ module Fawn
         next if nsock == nil
         nsock.first.each do |sock|
           if sock == gs
-            socks.push(sock.accept)
+            socks.push(sock_accept(sock))
             logger.info "#{sock} is accepted"
           else
             yield sock
