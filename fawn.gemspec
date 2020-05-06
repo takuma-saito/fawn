@@ -6,5 +6,5 @@ Gem::Specification.new do |s|
   s.description = "Fawn is minimal mutlti thread web server"
   s.authors     = ["t-saito"]
   s.executables = ["fawn"]
-  s.add_runtime_dependency "rack", "~> 1.1"
+  s.add_runtime_dependency "rack"
 end
