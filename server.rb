@@ -64,10 +64,7 @@ module Fawn
     include BLOCK_MODE
 
     class StaticFile
-      def initialize(app)
-        @app = app
-      end
-      def call(env)
+      def self.call(env)
         headers = {}
         response =
           if File.readable?(filename = "#{BASE_DIR}#{env[SCRIPT_NAME]}") && File.file?(filename)
@@ -83,19 +80,16 @@ module Fawn
               content_type: 'text/plain; charset=utf-8',
             }
           end
-        headers['Content-Type'] = response[:content_type]
         headers['Date'] = DateTime.now.rfc822
-        headers['Content-Length'] = (body = response[:body]).bytesize
         [response[:status], headers, body]
       end
     end
 
+    RACK_CONFIG = 'config.ru'.freeze
     def build_app(app = nil)
       require 'bundler/setup'
       Bundler.require(:default)
-      [StaticFile, Rack::Runtime].inject(app) do |app, klass|
-        klass.new(app)
-      end
+      Rack::Builder.parse_file(RACK_CONFIG).first
     end
 
     def initialize(**opts)
@@ -167,15 +161,17 @@ module Fawn
         #{HTTP_1_1} #{status}\r
         #{headers_text}\r
         \r
-        #{body}
+        #{body.join}
       TEXT
     end
 
     def handle_request(sock)
       rack_env = parse_rack_env(*read_content(sock))
       logger.info rack_env
-      raise UnsupportedRequestError unless rack_env[REQUEST_METHOD] === 'GET'
-      sock.write(make_response(*@app.call(rack_env)))
+      raise UnsupportedRequestError unless ['HEAD', 'GET'].include?(rack_env[REQUEST_METHOD])
+      response = make_response(*@app.call(rack_env))
+      logger.info response
+      sock.write response
       sock.close
       logger.info "#{sock} is gone"
     end
@@ -198,7 +194,7 @@ module Fawn
           end
         rescue UnsupportedRequestError, InvalidFormatError => e
           logger.warn "#{e.full_message}"
-          break
+          raise e
         end
       end
     end
