@@ -2,15 +2,14 @@ require_relative 'thread_pool'
 require_relative 'server'
 
 module Fawn
-  module Launcher
+  class Launcher
     module SingleThread
       def run; single_thread_run; end
     end
     module MultiThread
       def run; multi_thread_run; end
     end
-    include SingleThread
-    module_function :run
+    include MultiThread
     
     def multi_thread_run
       tp = ThreadPool.new(10)

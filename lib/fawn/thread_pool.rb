@@ -5,6 +5,7 @@ module Fawn
   TIMEOUT = 10
   attr_reader :workers
   class ThreadPool
+    include Fawn::Logger
     def initialize(thread_nums)
       @mutex = Mutex.new
       @jobs  = SizedQueue.new(thread_nums)
@@ -46,20 +47,3 @@ module Fawn
     end
   end
 end
-
-def test
-  include Fawn
-  tp = ThreadPool.new(4)
-
-  15.times do |id|
-    puts "job add: #{id}"
-    tp << proc do |worker_id|
-      puts "start {worker_id:#{worker_id}, job_id:#{id}}"
-      sleep (rand * 2.0)
-      puts "finish {worker_id:#{worker_id}, job_id:#{id}}"
-    end
-  end
-
-  tp.shutdown
-end
-

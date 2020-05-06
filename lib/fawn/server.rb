@@ -2,7 +2,10 @@ require 'socket'
 require 'time'
 require 'uri'
 require 'stringio'
+require 'rack'
+require_relative 'const'
 require_relative 'logger'
+require_relative 'static_file'
 
 module Fawn
   CHUNK_SIZE = 512
@@ -62,34 +65,12 @@ module Fawn
     BLOCK_MODE = Block
 
     include BLOCK_MODE
-
-    class StaticFile
-      def self.call(env)
-        headers = {}
-        response =
-          if File.readable?(filename = "#{BASE_DIR}#{env[SCRIPT_NAME]}") && File.file?(filename)
-            {
-              status: 200,
-              body: (body = File.read(filename)),
-              content_type: "#{MIME[filename.split(".").last.to_sym] || 'application/octet-stream'}; charset=#{body.encoding}"
-            }
-          else
-            {
-              status: 404,
-              body: 'File not found',
-              content_type: 'text/plain; charset=utf-8',
-            }
-          end
-        headers['Date'] = DateTime.now.rfc822
-        [response[:status], headers, body]
-      end
-    end
+    include Fawn::Logger
+    include Fawn::Const
 
     RACK_CONFIG = 'config.ru'.freeze
     def build_app(app = nil)
-      require 'bundler/setup'
-      Bundler.require(:default)
-      Rack::Builder.parse_file(RACK_CONFIG).first
+      ::Rack::Builder.parse_file(RACK_CONFIG).first
     end
 
     def initialize(**opts)
@@ -108,24 +89,6 @@ module Fawn
       end.map {|key, value| ["HTTP_#{key.upcase}", value]}.to_h
       [[:method, :uri, :protocol].zip(status.split(" ")).to_h, http_headers, request_body]
     end
-    
-
-    REQUEST_METHOD    = 'REQUEST_METHOD'.freeze
-    SCRIPT_NAME       = 'SCRIPT_NAME'.freeze
-    PATH_INFO         = 'PATH_INFO'.freeze
-    QUERY_STRING      = 'QUERY_STRING'.freeze
-    SERVER_NAME       = 'SERVER_NAME'.freeze
-    SERVER_PORT       = 'SERVER_PORT'.freeze
-    RACK_VERSION      = 'rack.version'.freeze
-    RACK_URL_SCHEME   = 'rack.url_scheme'.freeze
-    RACK_INPUT        = 'rack.input'.freeze
-    RACK_ERRORS       = 'rack.errors'.freeze
-    RACK_MULTITHREAD  = 'rack.multithread'.freeze
-    RACK_MULTIPROCESS = 'rack.multiprocess'.freeze
-    RACK_RUN_ONCE     = 'rack.run_once'.freeze
-    RACK_HIJACK_P     = 'rack.hijack?'.freeze
-    RACK_HIJACK       = 'rack.hijack'.freeze
-    RACK_HIJACK_IO    = 'rack.hijack_io'.freeze
 
     def parse_rack_env(str)
       metainfo, http_headers, request_body = parse_headers(str)
@@ -198,13 +161,5 @@ module Fawn
         end
       end
     end
-  end
-end
-
-def test
-  include Fawn
-  server = Server.new
-  server.run do |sock|
-    server.handle_request(sock)
   end
 end
