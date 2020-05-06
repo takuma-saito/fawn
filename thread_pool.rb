@@ -1,12 +1,9 @@
-require 'logger'
 require 'timeout'
+require_relative 'logger'
 
 module Fawn
   TIMEOUT = 10
   attr_reader :workers
-  def logger
-    @logger ||= Logger.new(STDOUT)
-  end
   class ThreadPool
     def initialize(thread_nums)
       @mutex = Mutex.new

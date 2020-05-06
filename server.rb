@@ -1,6 +1,6 @@
 require 'socket'
 require 'time'
-require_relative 'mime'
+require_relative 'logger'
 
 module Fawn
   CHUNK_SIZE = 512
@@ -19,15 +19,26 @@ module Fawn
       js: 'application/js',
     }
 
-  class Server    
+  class Server
     class InvalidFormatError < StandardError; end
     class UnsupportedProtocolError < StandardError; end
     
-    def read_header(sock)
+    def read_content(sock)
       String.new.then do |str|
         loop do
           str << (t = sock.recv(CHUNK_SIZE))
           break str if t.size < CHUNK_SIZE
+        end
+      end
+    end
+
+    def read_content_nonblocking(sock)
+      String.new.then do |str|
+        loop do
+          str << (t = sock.recv_nonblock(CHUNK_SIZE))
+          break str if t.size < CHUNK_SIZE
+        rescue Errno::EAGAIN
+          IO.select([sock])
         end
       end
     end
@@ -70,11 +81,12 @@ module Fawn
     end
 
     def handle_request(sock)
-      header, rest_lines = parse_header(read_header(sock)).tap {|header, _| p header }
+      header, rest_lines = parse_header(read_content_nonblocking(sock))
+      logger.info header
       raise UnsupportedProtocolError unless header[:protocol] === HTTP_1_1 || header[:method] === 'GET'
       handle_static_file(sock, header)
       sock.close
-      puts "#{sock} is gone"
+      logger.info "#{sock} is gone"
     end
 
     def run
@@ -88,13 +100,13 @@ module Fawn
         nsock.first.each do |sock|
           if sock == gs
             socks.push(sock.accept)
-            puts "#{sock} is accepted"
+            logger.info "#{sock} is accepted"
           else
             yield sock
             socks.delete(sock)
           end
         rescue UnsupportedProtocolError, InvalidFormatError => e
-          warn "#{e.full_message}"
+          logger.warn "#{e.full_message}"
           break
         end
       end
@@ -103,8 +115,9 @@ module Fawn
 end
 
 def test
-  include Fawn::Server
-  run do |sock|
-    handle_request(sock)
+  include Fawn
+  server = Server.new
+  server.run do |sock|
+    server.handle_request(sock)
   end
 end
